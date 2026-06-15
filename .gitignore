@@ -1,0 +1,4 @@
+fonts/
+dist/
+__pycache__/
+.venv/
