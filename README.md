@@ -16,8 +16,8 @@
 ## 使用
 
 ```sh
-./build.py                 # 下载来源字体，生成 dist/*.ttf
-cp dist/*.ttf ~/Library/Fonts/
+./build.py                       # 下载来源字体，生成 dist/LXGWHybrid.ttc
+cp dist/LXGWHybrid.ttc ~/Library/Fonts/
 ```
 
 随后只需引用这一个字族名——在 Ghostty 中无需再写 `font-family-bold`：
@@ -25,6 +25,19 @@ cp dist/*.ttf ~/Library/Fonts/
 ```
 font-family = "LXGW WenKai ZhenKai Mono GB"
 ```
+
+## 别名字族（一个 .ttc，多个字族名）
+
+`build.py` 把同一套合成字形以多个上游 LXGW 字族名各打包一份，全部塞进**一个** `.ttc`。
+任何仍在引用这些名字的程序（如鼠须管、旧的 CSS、不想改的配置）都会拿到本合成字体，
+而不会回退到宋体。macOS（CoreText）没有 fontconfig 那样的别名机制，所以只能靠改写字体
+元数据来「冒名」；好在 `.ttc` 会共享字形表，9 个字族 18 个 face 也只占两款来源字体的体积
+（约 42 MB），而非 9 份拷贝。
+
+冒名字族（每个都解析到本合成字体，Bold 即臻楷）：
+`LXGW WenKai`、`LXGW WenKai GB`、`LXGW WenKai Screen`、`LXGW WenKai GB Screen`，
+以及对应的 `… Mono …` 等宽名。**注意是「冒名」**：`Screen` 别名并不是真正的轻量屏显字面，
+比例字族也仍带等宽来源的西文宽度——汉字（全宽）完全通用，仅此而已。
 
 ## 关于臻楷的字形（重要说明）
 

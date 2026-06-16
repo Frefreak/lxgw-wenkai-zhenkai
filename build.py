@@ -45,11 +45,37 @@ from typing import Any
 
 # fonttools is declared in the inline script block above and installed by
 # `uv run`; a plain type checker won't see it, so silence just that one rule.
-from fontTools.ttLib import TTFont  # pyright: ignore[reportMissingImports]
+from fontTools.ttLib import TTFont, TTCollection  # pyright: ignore[reportMissingImports]
 
 # --------------------------------------------------------------- config -----
 # The merged family name you will reference in Ghostty / CSS / anywhere.
 FAMILY = "LXGW WenKai ZhenKai Mono GB"
+
+# We also emit the SAME merged glyphs under every common upstream LXGW family
+# name, so any app still asking for one of those names (Rime/Squirrel, old CSS,
+# a config you don't want to touch) is handed our hybrid instead of falling
+# through to SimSun. CoreText groups by family name baked into the file, so each
+# alias must be a *separate* pair of files with its own unique PostScript / unique
+# IDs -- there is no symlink-style aliasing on macOS. The glyph outlines are
+# identical across all of them; only the metadata differs.
+#
+# Note the honest caveats: every alias serves WenKai-Mono-GB (regular) +
+# ZhenKai-GB (bold) glyphs regardless of what its name promises -- a "Screen"
+# alias is NOT the real light screen-hinted face, and a proportional-named alias
+# still carries the Mono source's fixed-width Latin. For CJK (full-width, the
+# common case) they are interchangeable; this is a deliberate masquerade.
+ALIASES = [
+    # proportional names
+    "LXGW WenKai",
+    "LXGW WenKai GB",
+    "LXGW WenKai Screen",
+    "LXGW WenKai GB Screen",
+    # monospace names
+    "LXGW WenKai Mono",
+    "LXGW WenKai Mono GB",
+    "LXGW WenKai Mono Screen",
+    "LXGW WenKai Mono GB Screen",
+]
 
 HERE = Path(__file__).parent
 SRC = HERE / "fonts"   # downloaded upstream originals (git-ignored)
@@ -98,8 +124,14 @@ def set_name(font: TTFont, name_id: int, value: str) -> None:
     name.setName(value, name_id, 1, 0, 0)      # Mac, Roman, en
 
 
-def retag(src: Path, *, style: str, weight: int, bold: bool, out: Path) -> None:
-    """Re-label one source font as a member of FAMILY at the given weight."""
+def build_face(
+    src: Path, *, family: str, style: str, weight: int, bold: bool,
+    monospace: bool,
+) -> TTFont:
+    """Load `src` and re-label it as a member of `family` at the given weight,
+    returning the in-memory font. We touch ONLY the name/OS-2/head/post tables;
+    glyf/cmap/hmtx/etc. are left byte-identical across every face built from the
+    same source, which is what lets the TTC writer store them a single time."""
     font = TTFont(src)
     # fontTools decompiles these tables from the binary at load time, so their
     # fields (usWeightClass, macStyle, isFixedPitch, ...) are populated
@@ -110,11 +142,13 @@ def retag(src: Path, *, style: str, weight: int, bold: bool, out: Path) -> None:
     post: Any = font["post"]
 
     # 1. Naming -- make both files claim the SAME family, different subfamily.
-    ps_name = f"{FAMILY.replace(' ', '')}-{style}"      # ASCII, no spaces, unique
-    set_name(font, NAME_FAMILY, FAMILY)
+    #    The PostScript / unique IDs derive from the family, so every alias gets
+    #    a distinct identity and CoreText won't dedup one alias against another.
+    ps_name = f"{family.replace(' ', '')}-{style}"      # ASCII, no spaces, unique
+    set_name(font, NAME_FAMILY, family)
     set_name(font, NAME_SUBFAMILY, style)               # "Regular" / "Bold"
     set_name(font, NAME_UNIQUE, ps_name)                # break the dedup tie
-    set_name(font, NAME_FULL, f"{FAMILY} {style}")
+    set_name(font, NAME_FULL, f"{family} {style}")
     set_name(font, NAME_PS, ps_name)
     # Drop the typographic names so our simple RIBBI grouping (1/2) wins and
     # the two files collapse into a single Regular+Bold family.
@@ -135,14 +169,14 @@ def retag(src: Path, *, style: str, weight: int, bold: bool, out: Path) -> None:
 
     # 4. Advertise "monospaced" without touching any advance width. CJK glyphs
     #    are already full-width; this just satisfies an app that filters on the
-    #    flag (e.g. a terminal's font picker).
-    post.isFixedPitch = 1
+    #    flag (e.g. a terminal's font picker). Only the Mono-named families claim
+    #    it -- proportional aliases leave the flag as the source font set it, so
+    #    a picker offering "LXGW WenKai GB Screen" doesn't mislabel it monospace.
+    post.isFixedPitch = 1 if monospace else 0
     if getattr(os2, "panose", None) is not None:
-        os2.panose.bProportion = 9  # PANOSE proportion 9 == Monospaced
+        os2.panose.bProportion = 9 if monospace else 3  # 9=Monospaced, 3=Modern
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    font.save(out)
-    print(f"  wrote   {out.name:42} weight={weight}  {'Bold' if bold else 'Regular'}")
+    return font
 
 
 def cjk_advance(path: Path, ch: str = "一") -> tuple[int, int]:
@@ -173,15 +207,33 @@ def main() -> None:
     else:
         print("  -> identical: bold CJK will align with regular. No glyph edits.")
 
-    print("\nBuilding family:", FAMILY)
-    stem = FAMILY.replace(" ", "")
-    retag(wen, style="Regular", weight=400, bold=False, out=OUT / f"{stem}-Regular.ttf")
-    retag(zhen, style="Bold", weight=700, bold=True, out=OUT / f"{stem}-Bold.ttf")
+    # Build the canonical family plus every alias from the same two sources,
+    # then pack them all into ONE .ttc. Each Regular face carries byte-identical
+    # glyf/cmap/hmtx (so does each Bold face), so shareTables stores that heavy
+    # data once -- the collection ends up ~the size of the two source fonts, not
+    # 9x. Only the small per-family name/OS-2/head/post tables are duplicated.
+    families = [FAMILY, *ALIASES]
+    faces: list[TTFont] = []
+    for family in families:
+        mono = "Mono" in family
+        faces.append(build_face(wen, family=family, style="Regular",
+                                 weight=400, bold=False, monospace=mono))
+        faces.append(build_face(zhen, family=family, style="Bold",
+                                 weight=700, bold=True, monospace=mono))
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    out = OUT / "LXGWHybrid.ttc"
+    coll = TTCollection()
+    coll.fonts = faces
+    coll.save(str(out), shareTables=True)
+    print(f"\nWrote {out.name}: {len(faces)} faces / {len(families)} families, "
+          f"{out.stat().st_size / 2**20:.1f} MB")
 
     print("\nInstall:")
-    print(f"  cp {OUT}/*.ttf ~/Library/Fonts/")
-    print("\nThen reference a SINGLE family -- bold resolves to ZhenKai automatically:")
-    print(f'  font-family = "{FAMILY}"      # in Ghostty: no font-family-bold needed')
+    print(f"  cp {out} ~/Library/Fonts/")
+    print("\nEvery family below resolves to the hybrid (bold -> ZhenKai):")
+    for family in families:
+        print(f'  "{family}"')
 
 
 if __name__ == "__main__":
