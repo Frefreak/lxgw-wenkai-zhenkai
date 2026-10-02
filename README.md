@@ -49,3 +49,30 @@ font-family = "LXGW WenKai ZhenKai Mono GB"
 
 - 粗体字面的*西文*字形是比例宽度的（臻楷没有等宽版本）。在终端里它们通常不会被用到，因为主等宽字体会优先覆盖西文；但如果某个字符只有臻楷才有，它可能会略微偏离字格。
 - 可在 `build.py` 顶部修改 `FAMILY` 字族名，或调整固定的 `*_URL` 版本号。
+
+## Alacritty 合并字体
+
+`build-alacritty-font.py` 可生成 `Alacritty Fantasque WenKai Mono` 字族，
+供 macOS Alacritty 使用。原有 Fantasque 英文、Nerd Font 字形及字宽皆保留；
+所缺字符取自本项目的文楷 Regular、臻楷 Bold，并据原字体单位换算轮廓。
+
+运行前，须将下列字体置于 `~/Library/Fonts/`：
+
+- 本项目生成的 `LXGWHybrid.ttc`。
+- `FantasqueSansMNerdFontMono-Regular.ttf`。
+- `FantasqueSansMNerdFontMono-Bold.ttf`。
+- `FantasqueSansMNerdFontMono-Italic.ttf`。
+- `FantasqueSansMNerdFontMono-BoldItalic.ttf`。
+
+下令生成四款字面，再复制至用户字体目录：
+
+```fish
+uv run --script build-alacritty-font.py --output dist/alacritty
+cp dist/alacritty/*.ttf ~/Library/Fonts/
+```
+
+若来源字体另存他处，可加 `--fonts /path/to/fonts`。
+Alacritty 的 normal、bold、italic 字体 family 均可设为
+`Alacritty Fantasque WenKai Mono`，style 分别取 `Regular`、`Bold`、`Italic`。
+中文斜体沿用直立字形；粗体覆盖范围随臻楷来源而定。
+脚本保存字体后，会核验原有字形、字宽及行高参数。
